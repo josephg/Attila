@@ -32,62 +32,73 @@ addUnit = (unit) ->
 
   unit
 
+hsl = (h, s, l) -> (a = 1) -> "hsla(#{h},#{s*100}%,#{l*100}%,#{a})"
 cursors = [{x:200, y:100}, {x:600, y:500}]
-colors = ['red', 'blue']
+colors = [hsl(0,1,0.5), hsl(180,1,0.8)]
 
 cursorGrid = (p) -> [Math.floor(cursors[p].x)/5, (600 - Math.floor(cursors[p].y))/5]
 
 class Town
-  constructor: (@x, @y) ->
-    @owner = this
+  constructor: (@x, @y, @owner = 'neutral') ->
     @numUnits = 0
-    @hp = 50
+    @hp = 20
 
   added: ->
     @spawn() for [1..10]
 
   update: (dt) ->
-    return if @numUnits > 10
+    return if @numUnits >= 10
 
     @spawn() unless randInt 60 * 10
 
   draw: ->
-    ctx.fillStyle = (if typeof @owner is 'number' then colors[@owner] else 'black')
+    ctx.fillStyle = (if typeof @owner is 'number' then colors[@owner](0.8) else 'black')
     ctx.fillRect @x * 5, @y * 5, 5, 5
 
   spawn: ->
     [x, y] = [@x + (randInt 5) - 2, @y + (randInt 5) - 2]
-    u = addUnit new Unit(x, y, this) unless getMap x, y
+    u = addUnit new Unit(x, y, @owner, this) unless getMap x, y
     if u
       @numUnits++
+      u.followCursor = false
 
   die: (killer) ->
     @owner = killer.owner
-    @hp = 50
+    for u in units when u.town is this
+      u.owner = 'neutral'
+      u.town = null
 
+    @hp = 20
+    @numUnits = 0
+    #console.error 'town died'
 
 class Unit
-  constructor: (@x, @y, @owner) ->
+  constructor: (@x, @y, @owner, @town) ->
     @phase = rand 0.5
     @hp = 3
+    @followCursor = true
 
   move: ->
-    probability = if typeof @owner is 'number' # player
+    # Probability of moving randomly
+    probability = if @owner isnt 'neutral' and @followCursor # player
       .25
-    else
-      if Math.abs(@x-@owner.x) < 5 and Math.abs(@y-@owner.y) < 5
+    else if @town
+      if Math.abs(@x-@town.x) < 5 and Math.abs(@y-@town.y) < 5
         .9
       else
         .01
+    else
+      1
 
     [dx, dy] = if rand() < probability
       ([[-1,0],[0,-1],[1,0],[0,1]])[randInt 4]
     else
-      if typeof @owner is 'number'
+      if @followCursor
         [mx, my] = cursorGrid @owner
+      else if @town
+        [mx, my] = [@town.x, @town.y]
       else
-        mx = @owner.x
-        my = @owner.y
+        throw new Error 'NOT OK'
 
       theta = Math.atan2 (my-@y), (mx-@x)
       px = Math.cos theta
@@ -102,10 +113,20 @@ class Unit
     
     u = getMap @x+dx, @y+dy
     if u
-      # Maybe attack
-      
-      if u.owner != @owner
-        @attack u
+      if u instanceof Town # Attack a town
+        if u.owner is @owner
+          @hp = Math.min @hp+1, 3
+        else
+          @attack u
+          console.log u.hp
+
+      else # Attack a unit
+        if @owner isnt 'neutral' and u.owner is @owner and @followCursor
+          u.followCursor = true
+
+        else if u.owner != @owner
+          # Not one of my guys
+          @attack u
 
     else
       # Move
@@ -122,11 +143,10 @@ class Unit
   die: ->
     deadUnits.push this
     @dead = true
-    if @owner instanceof Town
-      @owner.numUnits--
+    @town.numUnits-- if @town
 
   draw: ->
-    ctx.fillStyle = (if typeof @owner is 'number' then colors[@owner] else 'grey')
+    ctx.fillStyle = (if typeof @owner is 'number' then colors[@owner](@hp/3) else 'grey')
     ctx.fillRect @x*5, @y*5, 5, 5
 
   update: (dt) ->
@@ -143,15 +163,16 @@ class Game extends atom.Game
     ctx.translate 0, 600
     ctx.scale 1, -1
 
-    for [1..3]
+    for owner in [0, 1]
+      [mx, my] = cursorGrid owner
+      addUnit new Town(mx, my, owner)
+
+    unit.followCursor = true for unit in units
+
+    for [1..5]
       [x, y] = [randInt(160), randInt(120)]
       addUnit new Town(x, y) unless getMap x, y
 
-    for owner in [0, 1]
-      for [1..20]
-        [mx, my] = cursorGrid owner
-        [x, y] = [mx + (randInt 15) - 2, my + (randInt 15) - 2]
-        addUnit new Unit(x, y, owner) unless getMap x, y
 
   update: (dt) ->
     dt = 1/60
@@ -224,3 +245,4 @@ game.run()
 
 window.onblur = -> game.stop()
 window.onfocus = -> game.run()
+
